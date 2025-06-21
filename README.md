@@ -1,0 +1,2 @@
+web page en github.io y conectada con google drive
+y conectado a través de google app script, hay que cambiar poco, guardar la carpeta en el drive, permisos todos, para no tener que usar contraseñas, en github publico, y tb se guarda la hoja de calculo en google drive (fuera de la carpeta) y copiar los codigos en el link de la carpeta, la hoja de calculo en el scirpt, y el link del script en la pg index html
