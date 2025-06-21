@@ -1,0 +1,138 @@
+// --- CONFIGURACIÓN ---
+const SPREADSHEET_ID = '17W6xwFXqmpcyG5y_2o3faXydPFQ_5H0yeTOrLfQz2jg';
+const DRIVE_FOLDER_ID = '1A-jPQB_VMeZ9_Uq8GdXRatwYGfJr-ucS';
+const SHEET_NAME = 'Hoja 1';
+
+/**
+ * Recibe los datos del formulario web (solicitudes POST).
+ * Guarda el texto y la imagen, y devuelve una respuesta de estado.
+ */
+function doPost(e) {
+  let response = { status: 'error', message: 'Error desconocido del servidor.' };
+
+  try {
+    const sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(SHEET_NAME);
+    if (!sheet) throw new Error(`La hoja "${SHEET_NAME}" no se encontró.`);
+
+    // Obtener los datos del formulario
+    const diaryEntry = e.parameter.diaryEntry || '';
+    const externalImageUrl = e.parameter.externalImageUrl || '';
+    const imageData = e.parameter.imageData;
+    const imageName = e.parameter.imageName || 'imagen_diario.png';
+    const timestamp = new Date();
+
+    let photoUrl = 'No hay foto';
+
+    // Opción 1: Si el usuario pegó una URL externa.
+    if (externalImageUrl.trim() !== '') {
+      photoUrl = externalImageUrl.trim();
+      console.log(`Usando URL externa: ${photoUrl}`);
+    
+    // Opción 2: Si el usuario subió un archivo.
+    } else if (imageData) {
+      try {
+        console.log('Procesando imagen subida para guardarla en Google Drive...');
+        const base64Data = imageData.split(',')[1];
+        const contentType = imageData.split(',')[0].split(':')[1].split(';')[0];
+        const decodedBlob = Utilities.newBlob(Utilities.base64Decode(base64Data), contentType, imageName);
+
+        const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+        const file = folder.createFile(decodedBlob);
+
+        // ¡CAMBIO IMPORTANTE! Hacer el archivo público y usar URL directa
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        const fileId = file.getId();
+        
+        // Generar URL directa para mostrar la imagen
+        photoUrl = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`;
+        
+        console.log(`Imagen subida. URL generada: ${photoUrl}`);
+
+      } catch (imageUploadError) {
+        console.error(`Error al procesar la imagen en Drive: ${imageUploadError.message}`);
+        photoUrl = `Error al subir la foto: ${imageUploadError.message}`;
+      }
+    }
+
+    // Añadir la nueva fila a la hoja de cálculo
+    sheet.appendRow([timestamp, diaryEntry, photoUrl]);
+    console.log('Nueva entrada guardada en la hoja.');
+    response = { status: 'success', message: 'Entrada guardada correctamente.' };
+
+  } catch (error) {
+    console.error(`Error crítico en doPost: ${error.message}. Pila: ${error.stack}`);
+    response = { status: 'error', message: `Error del servidor: ${error.message}` };
+  }
+
+  // Devolver la respuesta al cliente
+  return ContentService.createTextOutput(JSON.stringify(response))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Envía datos a la página web (solicitudes GET).
+ * Se usa para buscar entradas o conseguir la última entrada.
+ */
+function doGet(e) {
+  let response = { status: 'error', message: 'Acción no válida.' };
+
+  try {
+    const sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(SHEET_NAME);
+    if (!sheet) throw new Error(`La hoja "${SHEET_NAME}" no se encontró.`);
+    
+    const action = e.parameter.action;
+
+    // Función auxiliar para convertir una fila en un objeto y procesar URLs
+    const mapRowToEntry = (rowValues) => {
+        let photoUrl = rowValues[2];
+        
+        // Convertir URLs de Google Drive del formato anterior al nuevo formato
+        if (photoUrl && photoUrl.includes('drive.google.com/uc?export=view&id=')) {
+          const fileId = photoUrl.match(/id=([a-zA-Z0-9_-]+)/);
+          if (fileId && fileId[1]) {
+            photoUrl = `https://drive.google.com/thumbnail?id=${fileId[1]}&sz=w800`;
+          }
+        }
+        
+        return {
+            timestamp: rowValues[0], // Fecha y Hora
+            text: rowValues[1],      // Texto de la Entrada
+            photoUrl: photoUrl       // URL de la Foto (procesada)
+        };
+    };
+
+    const lastRowIndex = sheet.getLastRow();
+
+    if (action === 'getLatest') {
+        if (lastRowIndex < 2) { // No hay entradas si solo está la cabecera
+            response = { status: 'success', entry: null, message: 'Aún no hay entradas en el diario.' };
+        } else {
+            const lastRowValues = sheet.getRange(lastRowIndex, 1, 1, 3).getValues()[0];
+            response = { status: 'success', entry: mapRowToEntry(lastRowValues) };
+        }
+    } else if (action === 'getEntriesByDate') {
+        const startDate = new Date(e.parameter.startDate);
+        const endDate = new Date(e.parameter.endDate);
+        endDate.setHours(23, 59, 59, 999);
+
+        if (lastRowIndex < 2) {
+            response = { status: 'success', entries: [] };
+        } else {
+            const allValues = sheet.getRange(2, 1, lastRowIndex - 1, 3).getValues();
+            const entries = allValues.map(row => mapRowToEntry(row))
+                                     .filter(entry => {
+                                          const entryDate = new Date(entry.timestamp);
+                                          return entryDate >= startDate && entryDate <= endDate;
+                                      });
+            response = { status: 'success', entries: entries };
+        }
+    }
+
+  } catch (error) {
+    console.error(`Error en doGet: ${error.message}. Pila: ${error.stack}`);
+    response = { status: 'error', message: `Error al obtener datos: ${error.message}` };
+  }
+
+  return ContentService.createTextOutput(JSON.stringify(response))
+    .setMimeType(ContentService.MimeType.JSON);
+}
